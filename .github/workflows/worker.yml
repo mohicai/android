@@ -1,43 +1,41 @@
 name: Debug Android Emulator via Web ADB
 
-on: [push, workflow_dispatch]
+on: [push, workflow_dispatch] # 支持推送到代码库或手动在 GitHub 页面触发
 
 jobs:
   web-adb-debug:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
+    - name: Checkout code
       uses: actions/checkout@v4
 
-    # 1. 开启 KVM 硬件加速（这一步不可省略，否则模拟器无法运行）
+    # 1. 开启 KVM 硬件加速（云端虚拟机开模拟器必须这一步，否则 adb 会找不到设备）
     - name: Enable KVM group perms
       run: |
         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
 
-    # 2. 安装 Node.js 并部署 ws-scrcpy 网页投屏服务端
-    - name: Install ws-scrcpy
+    # 2. 部署最新版的 ws-scrcpy 网页投屏服务端（已修复 404 报错问题）
+    - name: Install and Run ws-scrcpy
       run: |
-        # 创建一个工作目录并安装 ws-scrcpy
         mkdir -p ws-scrcpy-server && cd ws-scrcpy-server
         npm init -y
-        # 安装官方提供的 ws-scrcpy 服务端核心包
-        npm install @u3u/ws-scrcpy
+        # 使用全新的官方公有包名，替代之前被弃用的旧包
+        npm install ws-scrcpy
         
-        # 在后台启动 ws-scrcpy 服务，默认会监听 8000 端口
-        # 使用 & 让它在后台静默运行
+        # 在后台启动 ws-scrcpy 服务，默认监听 8000 端口
         npx ws-scrcpy &
-        echo "ws-scrcpy 服务已在后台 8000 端口启动"
+        echo "ws-scrcpy 服务已在后台 8000 端口成功启动"
 
-    # 3. 接入你的 ZeroTier 私有网络
+    # 3. 接入你的 ZeroTier 私有局域网
     - name: ZeroTier
       uses: zerotier/github-action@v1.0.1
       with:
         network_id: 93afae5963172da4
 
-    # 4. 打印 ZeroTier 内网 IP（方便你复制网址）
+    # 4. 打印虚拟机的 ZeroTier 内网 IP（方便你复制网址）
     - name: Get ZeroTier IP
       run: |
         echo "=========================================================="
@@ -46,7 +44,7 @@ jobs:
         echo "=========================================================="
 
     # 5. 用 Headless（无界面）模式启动安卓模拟器
-    # 既然通过 Web 投屏，模拟器本身可以保持 -no-window 运行，完全不依赖桌面环境
+    # 模拟器会将画面渲染到后台，由 adb 传输给 ws-scrcpy 处理成网页
     - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
@@ -54,13 +52,13 @@ jobs:
         target: google_apis
         arch: x86_64
         profile: Nexus 6
-        # 使用 swiftshader 保证云端 CPU 稳定渲染画面
+        # -gpu swiftshader 强制使用 CPU 软件渲染画面，防止云端虚拟机因缺少物理显卡而闪退
         emulator-options: -no-audio -no-boot-anim -gpu swiftshader
         script: |
           echo "=========================================================="
           echo "模拟器已成功通过 adb 启动，并且已自动注册进 ws-scrcpy！"
-          echo "你可以通过 ZeroTier 访问以下网页查看纯模拟器画面："
-          echo "访问地址: http://<你的GitHub_Runner_ZeroTier_IP>:8000"
+          echo "你可以通过已连接 ZeroTier 的本地电脑访问以下网页查看画面："
+          echo "访问地址: http://<上面步骤获取到的ZeroTier_IP>:8000"
           echo "=========================================================="
-          # 保持流水线运行 15 分钟供你在线操控
+          # 保持流水线运行 15 分钟供你在线操作，时间到后虚拟机将自动销毁
           sleep 900
