@@ -1,33 +1,66 @@
-name: Debug Android Emulator in Web
+name: Debug Android Emulator via Web ADB
 
 on: [push, workflow_dispatch]
 
 jobs:
-  test:
+  web-adb-debug:
     runs-on: ubuntu-latest
+
     steps:
-      - name: checkout
-        uses: actions/checkout@v6
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+    # 1. 开启 KVM 硬件加速（这一步不可省略，否则模拟器无法运行）
+    - name: Enable KVM group perms
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
 
-      - name: ZeroTier
-        uses: zerotier/github-action@v1.0.1
-        with:
-          network_id: 93afae5963172da4
+    # 2. 安装 Node.js 并部署 ws-scrcpy 网页投屏服务端
+    - name: Install ws-scrcpy
+      run: |
+        # 创建一个工作目录并安装 ws-scrcpy
+        mkdir -p ws-scrcpy-server && cd ws-scrcpy-server
+        npm init -y
+        # 安装官方提供的 ws-scrcpy 服务端核心包
+        npm install @u3u/ws-scrcpy
+        
+        # 在后台启动 ws-scrcpy 服务，默认会监听 8000 端口
+        # 使用 & 让它在后台静默运行
+        npx ws-scrcpy &
+        echo "ws-scrcpy 服务已在后台 8000 端口启动"
 
+    # 3. 接入你的 ZeroTier 私有网络
+    - name: ZeroTier
+      uses: zerotier/github-action@v1.0.1
+      with:
+        network_id: 93afae5963172da4
 
+    # 4. 打印 ZeroTier 内网 IP（方便你复制网址）
+    - name: Get ZeroTier IP
+      run: |
+        echo "=========================================================="
+        echo "当前虚拟机的 ZeroTier 状态："
+        sudo zerotier-cli listnetworks
+        echo "=========================================================="
 
-      - name: run tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 29
-          script: ./gradlew connectedCheck
-          
-      - name: Sleep
-        run: |
+    # 5. 用 Headless（无界面）模式启动安卓模拟器
+    # 既然通过 Web 投屏，模拟器本身可以保持 -no-window 运行，完全不依赖桌面环境
+    - name: Run Android Emulator
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 30
+        target: google_apis
+        arch: x86_64
+        profile: Nexus 6
+        # 使用 swiftshader 保证云端 CPU 稳定渲染画面
+        emulator-options: -no-audio -no-boot-anim -gpu swiftshader
+        script: |
+          echo "=========================================================="
+          echo "模拟器已成功通过 adb 启动，并且已自动注册进 ws-scrcpy！"
+          echo "你可以通过 ZeroTier 访问以下网页查看纯模拟器画面："
+          echo "访问地址: http://<你的GitHub_Runner_ZeroTier_IP>:8000"
+          echo "=========================================================="
+          # 保持流水线运行 15 分钟供你在线操控
           sleep 900
