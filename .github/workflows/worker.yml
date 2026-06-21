@@ -1,0 +1,40 @@
+name: Debug Android Emulator in Web
+
+on: [push]
+
+jobs:
+  web-vnc-debug:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # 1. 开启 KVM 硬件加速（保证模拟器流畅）
+    - name: Enable KVM group perms
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    # 2. 启动 VNC 环境（它会创建一个虚拟显示器，并生成一个可以在线访问的 URL）
+    - name: Setup VNC Environment
+      uses: AmrDeveloper/vnc-github-actions@v1.1.0
+      with:
+        # 这里会自动通过 ngrok 等工具生成一个临时网页链接
+        ngrok-auth-token: ${{ secrets.NGROK_AUTH_TOKEN }} # 需要去 ngrok 官网注册个免费 token 存到 GitHub Secrets 里
+
+    # 3. 在这个 VNC 环境中启动安卓模拟器
+    - name: Run Android Emulator
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 30
+        target: google_apis
+        arch: x86_64
+        # 注意：这里去掉了 -no-window，允许它在虚拟桌面里渲染画面
+        profile: Nexus 6
+        script: |
+          echo "模拟器已在 VNC 环境中启动！"
+          echo "请点击上方 VNC 步骤输出的链接，在网页中查看和操作模拟器。"
+          # 让任务保持运行一段时间，方便你进去调试（比如等待 15 分钟）
+          sleep 900
