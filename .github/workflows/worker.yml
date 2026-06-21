@@ -1,6 +1,6 @@
 name: Debug Android Emulator in Web
 
-on: [push]
+on: [push, workflow_dispatch] # 允许手动触发
 
 jobs:
   web-vnc-debug:
@@ -10,31 +10,48 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # 1. 开启 KVM 硬件加速（保证模拟器流畅）
+    # 1. 开启 KVM 硬件加速
     - name: Enable KVM group perms
       run: |
         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
 
-    # 2. 启动 VNC 环境（它会创建一个虚拟显示器，并生成一个可以在线访问的 URL）
-    - name: Setup VNC Environment
-      uses: AmrDeveloper/vnc-github-actions@v1.1.0
-      with:
-        # 这里会自动通过 ngrok 等工具生成一个临时网页链接
-        ngrok-auth-token: ${{ secrets.NGROK_AUTH_TOKEN }} # 需要去 ngrok 官网注册个免费 token 存到 GitHub Secrets 里
+    # 2. 原生安装 XFCE 桌面、VNC 和 noVNC
+    - name: Install Desktop Environment and noVNC
+      run: |
+        sudo apt-get update
+        # 安装轻量级桌面和 VNC 服务（减少内存占用）
+        sudo apt-get install -y xfce4 xfce4-goodies tigervnc-standalone-server novnc websockify
+        
+        # 配置 VNC 密码 (这里设置密码为 "vncpasswd"，你可以自行修改)
+        mkdir -p ~/.vnc
+        echo "vncpasswd" | vncpasswd -f > ~/.vnc/passwd
+        chmod 600 ~/.vnc/passwd
+        
+        # 启动 VNC 服务在 :1 端口（实际对应 5901）
+        vncserver :1 -geometry 1280x800 -depth 24
+        
+        # 启动 noVNC 网页服务，将 5901 端口转换为 6080 网页端口
+        # 使用 & 让它在后台运行
+        /usr/share/novnc/utils/launch.sh --vnc localhost:5901 --listen 6080 &
 
-    # 3. 在这个 VNC 环境中启动安卓模拟器
+    - name: ZeroTier
+      uses: zerotier/github-action@v1.0.1
+      with:
+        network_id: 93afae5963172da4
+        
+    # 4. 在这个桌面环境里启动安卓模拟器
     - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
         api-level: 30
         target: google_apis
         arch: x86_64
-        # 注意：这里去掉了 -no-window，允许它在虚拟桌面里渲染画面
         profile: Nexus 6
+        # 注意：这里不能加 -no-window，必须让模拟器把画面渲染到刚才创建的虚拟桌面里
+        emulator-options: -no-audio -no-boot-anim
         script: |
-          echo "模拟器已在 VNC 环境中启动！"
-          echo "请点击上方 VNC 步骤输出的链接，在网页中查看和操作模拟器。"
-          # 让任务保持运行一段时间，方便你进去调试（比如等待 15 分钟）
+          echo "模拟器已在虚拟桌面中启动！"
+          echo "流水线将保持运行 15 分钟供你在线调试..."
           sleep 900
