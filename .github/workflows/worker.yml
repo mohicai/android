@@ -34,28 +34,31 @@ jobs:
     # 4. 用纯脚本在后台创建并启动模拟器，手动等待其上线
     - name: Custom Run Android Emulator (Pure Script)
       run: |
-        # 1. 配置 Android SDK 环境变量（GitHub 镜像原生自带）
+        # 1. 临时彻底关闭 Ubuntu 的系统防火墙，防止 5555 端口被拦截
+        sudo ufw disable || true
+        
+        # 2. 配置 Android SDK 环境变量
         export ANDROID_HOME=/usr/local/lib/android/sdk
         export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH
         
-        # 2. 自动接受所有 SDK 协议组件
+        # 3. 自动接受所有 SDK 协议组件
         yes | sdkmanager --licenses > /dev/null
         
-        # 3. 下载并创建一个干净的 AVD 模拟器 (API 30, google_apis)
+        # 4. 下载并创建一个干净的 AVD 模拟器
         echo "正在创建 AVD 模拟器..."
         sdkmanager "system-images;android-30;google_apis;x86_64" > /dev/null
         echo "no" | avdmanager create avd -n cloud_emulator -k "system-images;android-30;google_apis;x86_64" --device "Nexus 6" --force
         
-        # 4. 在后台启动模拟器（完全避开任何第三方 Actions 插件的限制）
+        # 5. 在后台启动模拟器
         echo "正在后台拉起模拟器..."
         emulator -avd cloud_emulator -no-window -no-audio -no-boot-anim -gpu swiftshader > /dev/null 2>&1 &
         
-        # 5. 核心：优雅地等待 adb 从 offline 变成 online
+        # 6. 优雅地等待 adb 上线
         echo "正在等待模拟器 ADB 建立连接 (wait-for-device)..."
         adb wait-for-device
         echo "🎉 adb 已成功识别到设备！开始监控系统引导状态..."
         
-        # 6. 循环检测 Android 系统桌面是否彻底加载完毕
+        # 7. 循环检测 Android 系统桌面是否彻底加载完毕
         BOOT_COMPLETED=""
         while [ "$BOOT_COMPLETED" != "1" ]; do
           sleep 5
@@ -64,12 +67,20 @@ jobs:
         done
         
         echo "=========================================================="
-        echo "🔥 模拟器完全开机成功！已准备好接受远程连接！"
+        echo "🔥 模拟器完全开机成功！正在配置远程监听端口..."
         echo "=========================================================="
         
-        # 7. 切换 adb 监听为 5555 网络端口，并保持流水线
+        # 【核心修复】：重启 adb 进程并强制它监听 0.0.0.0（所有网卡接口）
+        adb kill-server
+        export ADBHOST=0.0.0.0
+        adb -a nodaemon server start > /dev/null 2>&1 &
+        sleep 3
+        
+        # 再次确认模拟器在内部被正确识别，并开启 5555
         adb tcpip 5555
-        echo "本地电脑请在终端执行: adb connect <上面获取到的ZeroTier_IP>:5555"
+        
+        echo "=========================================================="
+        echo "本地电脑请在终端执行: adb connect 172.27.253.225:5555"
         echo "=========================================================="
         
         # 留出 15 分钟供你连接和调试
