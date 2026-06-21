@@ -10,7 +10,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 1. 开启 KVM 硬件加速（必须开启，否则模拟器无法建立 adb 端口）
+    # 1. 开启 KVM 硬件加速
     - name: Enable KVM group perms
       run: |
         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -31,25 +31,46 @@ jobs:
         sudo zerotier-cli listnetworks
         echo "=========================================================="
 
-    # 4. 在后台启动纯无界面（Headless）安卓模拟器
-    - name: Run Android Emulator
-      uses: reactivecircus/android-emulator-runner@v2
-      with:
-        api-level: 30
-        target: google_apis
-        arch: x86_64
-        profile: Nexus 6
-        # -no-window 彻底关闭图形界面渲染，纯后台 adb 运行，极大节省云端资源
-        emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader
-        script: |
-          # 允许 adb 监听所有网络接口（而不仅仅是 localhost），以便远程电脑连接
-          adb tcpip 5555
-          
-          echo "=========================================================="
-          echo "模拟器 adb 远程连接端口 5555 已在后台开放！"
-          echo "请在本地电脑上打开终端执行以下命令进行连接："
-          echo "adb connect <上面步骤获取到的ZeroTier_IP>:5555"
-          echo "=========================================================="
-          
-          # 保持流水线运行 15 分钟供你本地 adb 调试
-          sleep 900
+    # 4. 用纯脚本在后台创建并启动模拟器，手动等待其上线
+    - name: Custom Run Android Emulator (Pure Script)
+      run: |
+        # 1. 配置 Android SDK 环境变量（GitHub 镜像原生自带）
+        export ANDROID_HOME=/usr/local/lib/android/sdk
+        export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH
+        
+        # 2. 自动接受所有 SDK 协议组件
+        yes | sdkmanager --licenses > /dev/null
+        
+        # 3. 下载并创建一个干净的 AVD 模拟器 (API 30, google_apis)
+        echo "正在创建 AVD 模拟器..."
+        sdkmanager "system-images;android-30;google_apis;x86_64" > /dev/null
+        echo "no" | avdmanager create avd -n cloud_emulator -k "system-images;android-30;google_apis;x86_64" --device "Nexus 6" --force
+        
+        # 4. 在后台启动模拟器（完全避开任何第三方 Actions 插件的限制）
+        echo "正在后台拉起模拟器..."
+        emulator -avd cloud_emulator -no-window -no-audio -no-boot-anim -gpu swiftshader > /dev/null 2>&1 &
+        
+        # 5. 核心：优雅地等待 adb 从 offline 变成 online
+        echo "正在等待模拟器 ADB 建立连接 (wait-for-device)..."
+        adb wait-for-device
+        echo "🎉 adb 已成功识别到设备！开始监控系统引导状态..."
+        
+        # 6. 循环检测 Android 系统桌面是否彻底加载完毕
+        BOOT_COMPLETED=""
+        while [ "$BOOT_COMPLETED" != "1" ]; do
+          sleep 5
+          BOOT_COMPLETED=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+          echo "等待 Android 系统彻底完成引导中..."
+        done
+        
+        echo "=========================================================="
+        echo "🔥 模拟器完全开机成功！已准备好接受远程连接！"
+        echo "=========================================================="
+        
+        # 7. 切换 adb 监听为 5555 网络端口，并保持流水线
+        adb tcpip 5555
+        echo "本地电脑请在终端执行: adb connect <上面获取到的ZeroTier_IP>:5555"
+        echo "=========================================================="
+        
+        # 留出 15 分钟供你连接和调试
+        sleep 900
