@@ -1,41 +1,29 @@
-name: Debug Android Emulator via Web ADB
+name: Remote ADB Android Emulator
 
-on: [push, workflow_dispatch] # 支持推送到代码库或手动在 GitHub 页面触发
+on: [push, workflow_dispatch]
 
 jobs:
-  web-adb-debug:
+  remote-adb-debug:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 1. 开启 KVM 硬件加速（云端虚拟机开模拟器必须这一步，否则 adb 会找不到设备）
+    # 1. 开启 KVM 硬件加速（必须开启，否则模拟器无法建立 adb 端口）
     - name: Enable KVM group perms
       run: |
         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
 
-    # 2. 部署最新版的 ws-scrcpy 网页投屏服务端（已修复 404 报错问题）
-    - name: Install and Run ws-scrcpy
-      run: |
-        mkdir -p ws-scrcpy-server && cd ws-scrcpy-server
-        npm init -y
-        # 使用全新的官方公有包名，替代之前被弃用的旧包
-        npm install ws-scrcpy
-        
-        # 在后台启动 ws-scrcpy 服务，默认监听 8000 端口
-        npx ws-scrcpy &
-        echo "ws-scrcpy 服务已在后台 8000 端口成功启动"
-
-    # 3. 接入你的 ZeroTier 私有局域网
+    # 2. 接入你的 ZeroTier 私有网络
     - name: ZeroTier
       uses: zerotier/github-action@v1.0.1
       with:
         network_id: 93afae5963172da4
 
-    # 4. 打印虚拟机的 ZeroTier 内网 IP（方便你复制网址）
+    # 3. 打印 GitHub 虚拟机的 ZeroTier 内网 IP
     - name: Get ZeroTier IP
       run: |
         echo "=========================================================="
@@ -43,8 +31,7 @@ jobs:
         sudo zerotier-cli listnetworks
         echo "=========================================================="
 
-    # 5. 用 Headless（无界面）模式启动安卓模拟器
-    # 模拟器会将画面渲染到后台，由 adb 传输给 ws-scrcpy 处理成网页
+    # 4. 在后台启动纯无界面（Headless）安卓模拟器
     - name: Run Android Emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
@@ -52,13 +39,17 @@ jobs:
         target: google_apis
         arch: x86_64
         profile: Nexus 6
-        # -gpu swiftshader 强制使用 CPU 软件渲染画面，防止云端虚拟机因缺少物理显卡而闪退
-        emulator-options: -no-audio -no-boot-anim -gpu swiftshader
+        # -no-window 彻底关闭图形界面渲染，纯后台 adb 运行，极大节省云端资源
+        emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader
         script: |
+          # 允许 adb 监听所有网络接口（而不仅仅是 localhost），以便远程电脑连接
+          adb tcpip 5555
+          
           echo "=========================================================="
-          echo "模拟器已成功通过 adb 启动，并且已自动注册进 ws-scrcpy！"
-          echo "你可以通过已连接 ZeroTier 的本地电脑访问以下网页查看画面："
-          echo "访问地址: http://<上面步骤获取到的ZeroTier_IP>:8000"
+          echo "模拟器 adb 远程连接端口 5555 已在后台开放！"
+          echo "请在本地电脑上打开终端执行以下命令进行连接："
+          echo "adb connect <上面步骤获取到的ZeroTier_IP>:5555"
           echo "=========================================================="
-          # 保持流水线运行 15 分钟供你在线操作，时间到后虚拟机将自动销毁
+          
+          # 保持流水线运行 15 分钟供你本地 adb 调试
           sleep 900
